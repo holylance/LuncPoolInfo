@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terra Classic Dashboard</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#0b1020;color:#e8eefc;padding:24px;margin:0}
+  .wrap{max-width:980px;margin:auto}
+  h2{margin:0 0 18px 0;font-size:24px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .card{background:#151c33;padding:20px;border-radius:14px;box-shadow:0 6px 20px rgba(0,0,0,.18)}
+  .label{opacity:.75;font-size:14px;margin-bottom:10px}
+  .sub{font-size:15px;opacity:.9;margin-top:10px}
+  .value{font-size:24px;font-weight:700;margin-top:6px;word-break:break-word}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  button{background:#2b6ef3;color:#fff;border:0;border-radius:10px;padding:10px 14px;cursor:pointer;font-size:14px}
+  .status{margin-top:16px;padding:12px 14px;border-radius:10px;background:#11182d;font-size:13px;opacity:.92;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>StakeBin 대체용 웹페이지 입니다. 코인 니엘 제작 & 제공</h2>
+
+  <div class="toolbar">
+    <button onclick="fetchData()">새로고침</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Total Supply</div>
+      <div class="sub">LUNC</div>
+      <div class="value" id="supply_lunc">불러오는 중...</div>
+      <div class="sub">USTC</div>
+      <div class="value" id="supply_ustc">불러오는 중...</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Community Pool</div>
+      <div class="sub">LUNC</div>
+      <div class="value" id="community_lunc">불러오는 중...</div>
+      <div class="sub">USTC</div>
+      <div class="value" id="community_ustc">불러오는 중...</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Oracle Pool</div>
+      <div class="sub">LUNC</div>
+      <div class="value" id="oracle_lunc">불러오는 중...</div>
+      <div class="sub">USTC</div>
+      <div class="value" id="oracle_ustc">불러오는 중...</div>
+    </div>
+  </div>
+
+  <div class="status" id="status">상태: 초기화 중</div>
+</div>
+
+<script>
+const LCDS = [
+  "https://lcd.terra-classic.hexxagon.io",
+  "https://terra.stakesystems.io",
+  "https://lcd.mcontrol.ml",
+  "https://terra-lcd.easy2stake.com"
+];
+
+function setText(id, value){
+  document.getElementById(id).innerText = value;
+}
+
+function formatAmount(v){
+  if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "-";
+  return Math.floor(Number(v) / 1000000).toLocaleString();
+}
+
+function getCoinAmount(list, denom){
+  if (!Array.isArray(list)) return 0;
+  const found = list.find(x => x && x.denom === denom);
+  return found ? Number(found.amount || 0) : 0;
+}
+
+function findAddressDeep(obj){
+  if (!obj || typeof obj !== "object") return null;
+  if (typeof obj.address === "string" && obj.address.startsWith("terra")) return obj.address;
+  for (const key of Object.keys(obj)) {
+    const v = obj[key];
+    if (v && typeof v === "object") {
+      const found = findAddressDeep(v);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function fetchJson(url){
+  const res = await fetch(url, { headers: { "accept": "application/json" } });
+  if (!res.ok) throw new Error(res.status + " " + res.statusText + " @ " + url);
+  return await res.json();
+}
+
+async function findWorkingLCD(){
+  const errors = [];
+  for (const lcd of LCDS){
+    try{
+      await fetchJson(lcd + "/cosmos/base/tendermint/v1beta1/node_info");
+      return { lcd, errors };
+    }catch(e){
+      errors.push(String(e));
+    }
+  }
+  throw new Error("작동하는 LCD를 찾지 못했습니다.\n" + errors.join("\n"));
+}
+
+async function fetchOracleAddress(lcd){
+  try{
+    const j = await fetchJson(lcd + "/cosmos/auth/v1beta1/module_accounts/oracle");
+    return findAddressDeep(j);
+  }catch(e1){
+    const all = await fetchJson(lcd + "/cosmos/auth/v1beta1/module_accounts");
+    const accounts = all.accounts || [];
+    const oracleAcc = accounts.find(a =>
+      a?.name === "oracle" ||
+      a?.base_account?.name === "oracle" ||
+      a?.base_vesting_account?.base_account?.name === "oracle"
+    );
+    const addr = findAddressDeep(oracleAcc);
+    if (!addr) throw e1;
+    return addr;
+  }
+}
+
+async function fetchData(){
+  setText("status", "상태: 조회 중...");
+  ["supply_lunc","supply_ustc","community_lunc","community_ustc","oracle_lunc","oracle_ustc"].forEach(id => setText(id, "불러오는 중..."));
+
+  try{
+    const { lcd } = await findWorkingLCD();
+
+    const [
+      supplyLuncData,
+      supplyUstcData,
+      communityData
+    ] = await Promise.all([
+      fetchJson(lcd + "/cosmos/bank/v1beta1/supply/by_denom?denom=uluna"),
+      fetchJson(lcd + "/cosmos/bank/v1beta1/supply/by_denom?denom=uusd"),
+      fetchJson(lcd + "/cosmos/distribution/v1beta1/community_pool")
+    ]);
+
+    const supplyLunc = Number(supplyLuncData?.amount?.amount || 0);
+    const supplyUstc = Number(supplyUstcData?.amount?.amount || 0);
+    const communityLunc = getCoinAmount(communityData?.pool, "uluna");
+    const communityUstc = getCoinAmount(communityData?.pool, "uusd");
+
+    setText("supply_lunc", formatAmount(supplyLunc));
+    setText("supply_ustc", formatAmount(supplyUstc));
+    setText("community_lunc", formatAmount(communityLunc));
+    setText("community_ustc", formatAmount(communityUstc));
+
+    try{
+      const oracleAddr = await fetchOracleAddress(lcd);
+      const bal = await fetchJson(lcd + "/cosmos/bank/v1beta1/balances/" + oracleAddr);
+      const oracleLunc = getCoinAmount(bal?.balances, "uluna");
+      const oracleUstc = getCoinAmount(bal?.balances, "uusd");
+      setText("oracle_lunc", formatAmount(oracleLunc));
+      setText("oracle_ustc", formatAmount(oracleUstc));
+      setText("status", "상태: 정상 조회 완료\nLCD: " + lcd);
+    }catch(oracleErr){
+      setText("oracle_lunc", "-");
+      setText("oracle_ustc", "-");
+      setText("status", "상태: Supply / Community Pool은 조회 성공, Oracle Pool은 조회 실패\nLCD: " + lcd + "\nOracle 오류: " + oracleErr);
+    }
+  }catch(e){
+    ["supply_lunc","supply_ustc","community_lunc","community_ustc","oracle_lunc","oracle_ustc"].forEach(id => setText(id, "-"));
+    setText("status", "상태: 조회 실패\n" + e);
+  }
+}
+
+fetchData();
+</script>
+</body>
+</html>
